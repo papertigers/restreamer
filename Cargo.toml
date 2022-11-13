@@ -1,0 +1,18 @@
+[package]
+name = "dvr-restream"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0.66"
+bytes = "1.2.1"
+dropshot = "0.8.0"
+futures-util = "0.3.25"
+hyper = "0.14.22"
+illumos-priv = "0.2.0"
+schemars = "0.8.11"
+serde = "1.0.147"
+tokio = { version = "1.21.2", features = ["full"] }
+toml = "0.5.9"
