@@ -129,9 +129,13 @@ async fn find_latest_file(app: AppCtx) -> anyhow::Result<()> {
 }
 
 #[derive(Deserialize, JsonSchema)]
+struct AuthQueryParam {
+    auth: String,
+}
+
+#[derive(Deserialize, JsonSchema)]
 struct EnableStreamQueryParam {
     enabled: bool,
-    auth: String,
 }
 
 #[endpoint {
@@ -142,16 +146,18 @@ struct EnableStreamQueryParam {
 async fn enable_live_stream(
     rqctx: Arc<RequestContext<AppCtx>>,
     query_parms: Query<EnableStreamQueryParam>,
+    auth_parms: Query<AuthQueryParam>,
 ) -> Result<HttpResponseOk<()>, HttpError> {
     let app = rqctx.context();
     let query = query_parms.into_inner();
-    let user = app.require_auth(query.auth)?;
+    let auth = auth_parms.into_inner();
+    let user = app.require_auth(auth.auth)?;
 
     if !user.is_admin() {
         return Err(HttpError::for_client_error(
             None,
             StatusCode::UNAUTHORIZED,
-            "Provide a valid auth token".into(),
+            "Insufficient creds".into(),
         ));
     }
 
@@ -161,11 +167,6 @@ async fn enable_live_stream(
     Ok(HttpResponseOk(()))
 }
 
-#[derive(Deserialize, JsonSchema)]
-struct LiveStreamQueryParams {
-    auth: String,
-}
-
 #[endpoint {
     method = GET,
     path = "/live"
@@ -173,11 +174,11 @@ struct LiveStreamQueryParams {
 /// Live stream endpoint for end users.
 async fn live_stream(
     rqctx: Arc<RequestContext<AppCtx>>,
-    query_params: Query<LiveStreamQueryParams>,
+    auth_parms: Query<AuthQueryParam>,
 ) -> Result<Response<Body>, HttpError> {
     let app = rqctx.context();
-    let query = query_params.into_inner();
-    let _user = app.require_auth(query.auth)?;
+    let auth = auth_parms.into_inner();
+    let _user = app.require_auth(auth.auth)?;
 
     // If an admin has disabled live streaming we should bail now.
     let enabled = app.enabled.load(Ordering::SeqCst);
