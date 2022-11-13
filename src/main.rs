@@ -5,8 +5,8 @@ use bytes::BytesMut;
 use config::Config;
 use dropshot::{
     endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
-    ConfigLoggingLevel, ConfigTls, HttpError, HttpResponseOk,
-    HttpServerStarter, Query, RequestContext,
+    ConfigLoggingLevel, HttpError, HttpResponseOk, HttpServerStarter, Query,
+    RequestContext,
 };
 use futures_util::future;
 use hyper::{body::Sender, Body, Response, StatusCode};
@@ -221,6 +221,7 @@ async fn main() -> anyhow::Result<()> {
         .to_logger("minimal-example")?;
 
     let Config { users, watch_dir, tls } = Config::from_file("config.toml")?;
+    let tls = tls.map(From::from);
 
     let mut api = ApiDescription::new();
     api.register(live_stream).unwrap();
@@ -229,14 +230,10 @@ async fn main() -> anyhow::Result<()> {
     let app = Arc::new(App {
         watch_dir,
         dvr_file: RwLock::new(None),
-        // TODO when we have auth swap this back to false
-        enabled: AtomicBool::new(true),
+        enabled: AtomicBool::new(false),
         users,
     });
-
-    let watcher = find_latest_file(Arc::clone(&app));
-
-    let tls = tls.map(|c| ConfigTls { cert_file: c.cert, key_file: c.key });
+    let app_clone = Arc::clone(&app);
 
     let server = match HttpServerStarter::new(
         &ConfigDropshot {
@@ -254,10 +251,10 @@ async fn main() -> anyhow::Result<()> {
 
     drop_privs()?;
 
+    let watcher = find_latest_file(app_clone);
     let http = async {
         server.start().await.map_err(|e| anyhow!("server error: {e:?}"))
     };
-
     if let Err(e) = future::try_join(http, watcher).await {
         bail!("{e}");
     }

@@ -1,3 +1,4 @@
+use dropshot::ConfigTls;
 use serde::Deserialize;
 use std::{
     fs::File,
@@ -21,6 +22,12 @@ impl User {
 pub struct Tls {
     pub key: PathBuf,
     pub cert: PathBuf,
+}
+
+impl From<Tls> for ConfigTls {
+    fn from(t: Tls) -> Self {
+        Self { cert_file: t.cert, key_file: t.key }
+    }
 }
 
 #[derive(Deserialize)]
