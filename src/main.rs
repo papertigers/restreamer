@@ -2,7 +2,7 @@ mod config;
 
 use anyhow::{anyhow, bail};
 use bytes::BytesMut;
-use config::Config;
+use config::{Config, Server};
 use dropshot::{
     endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
     ConfigLoggingLevel, HttpError, HttpResponseOk, HttpServerStarter, Query,
@@ -13,6 +13,7 @@ use hyper::{body::Sender, Body, Response, StatusCode};
 use illumos_priv::{PrivOp, PrivPtype, PrivSet, Privilege};
 use schemars::JsonSchema;
 use serde::Deserialize;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -23,6 +24,8 @@ use tokio::{
     fs::File,
     io::{AsyncReadExt, AsyncSeekExt, BufReader},
 };
+
+const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
 
 type AppCtx = Arc<App>;
 struct App {
@@ -216,12 +219,21 @@ fn drop_privs() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<()> {
     let log = ConfigLogging::StderrTerminal { level: ConfigLoggingLevel::Info }
         .to_logger("minimal-example")?;
 
-    let Config { users, watch_dir, tls } = Config::from_file("config.toml")?;
+    let Config {
+        server: Server { host, port, reduce_privs, watch_dir, threads },
+        users,
+        tls,
+    } = Config::from_file("config.toml")?;
+
+    if let Some(true) = reduce_privs {
+        drop_privs()?;
+    }
+
+    let nthreads = threads.unwrap_or(4);
     let tls = tls.map(From::from);
 
     let mut api = ApiDescription::new();
@@ -236,29 +248,38 @@ async fn main() -> anyhow::Result<()> {
     });
     let app_clone = Arc::clone(&app);
 
-    let server = match HttpServerStarter::new(
-        &ConfigDropshot {
-            bind_address: "0.0.0.0:9090".parse().unwrap(),
-            request_body_max_bytes: 1024,
-            tls,
-        },
-        api,
-        app,
-        &log,
-    ) {
-        Ok(server) => server,
-        Err(e) => bail!(e),
-    };
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(nthreads)
+        .thread_name(format!("{}-worker", PROGRAM_NAME))
+        .enable_io()
+        .enable_time()
+        .build()
+        .expect("failed to build tokio runtime");
 
-    drop_privs()?;
+    if let Err(e) = rt.block_on(async {
+        let server = match HttpServerStarter::new(
+            &ConfigDropshot {
+                bind_address: SocketAddr::new(host, port),
+                request_body_max_bytes: 1024,
+                tls,
+            },
+            api,
+            app,
+            &log,
+        ) {
+            Ok(server) => server,
+            Err(e) => bail!(e),
+        };
 
-    let watcher = find_latest_file(app_clone);
-    let http = async {
-        server.start().await.map_err(|e| anyhow!("server error: {e:?}"))
+        let http = async {
+            server.start().await.map_err(|e| anyhow!("server error: {e:?}"))
+        };
+        let watcher = find_latest_file(app_clone);
+
+        future::try_join(http, watcher).await
+    }) {
+        bail! {"{e}"};
     };
-    if let Err(e) = future::try_join(http, watcher).await {
-        bail!("{e}");
-    }
 
     Ok(())
 }

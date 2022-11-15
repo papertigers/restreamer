@@ -3,8 +3,24 @@ use serde::Deserialize;
 use std::{
     fs::File,
     io::Read,
+    net::IpAddr,
     path::{Path, PathBuf},
 };
+
+#[derive(Deserialize)]
+/// Server specific settings
+pub struct Server {
+    // IP
+    pub host: IpAddr,
+    /// Port
+    pub port: u16,
+    /// Number of tokio worker threads
+    pub threads: Option<usize>,
+    /// Drop privs (useful if not running under smf)
+    pub reduce_privs: Option<bool>,
+    /// Direcotry the server will watch and stream out of
+    pub watch_dir: PathBuf,
+}
 
 #[derive(Deserialize)]
 pub struct User {
@@ -32,7 +48,7 @@ impl From<Tls> for ConfigTls {
 
 #[derive(Deserialize)]
 pub struct Config {
-    pub watch_dir: PathBuf,
+    pub server: Server,
     pub users: Vec<User>,
     pub tls: Option<Tls>,
 }
