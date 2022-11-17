@@ -20,6 +20,8 @@ pub struct Server {
     pub reduce_privs: Option<bool>,
     /// Direcotry the server will watch and stream out of
     pub watch_dir: PathBuf,
+    /// How often to scan for new files in seconds
+    pub scan_interval: Option<u64>,
 }
 
 #[derive(Deserialize)]

@@ -12,11 +12,11 @@ use futures_util::future;
 use hyper::{body::Sender, Body, Response, StatusCode};
 use illumos_priv::{PrivOp, PrivPtype, PrivSet, Privilege};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::{io::SeekFrom, path::Path, time::Duration};
 use tokio::fs;
 use tokio::sync::RwLock;
@@ -27,12 +27,31 @@ use tokio::{
 
 const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
 
+struct StreamTracker(Arc<()>);
+struct StreamTrackerPermit(Weak<()>);
+
+impl StreamTracker {
+    fn new() -> Self {
+        Self(Arc::new(()))
+    }
+
+    fn permit(&self) -> StreamTrackerPermit {
+        StreamTrackerPermit(Arc::downgrade(&self.0))
+    }
+
+    fn active_permits(&self) -> usize {
+        Arc::weak_count(&self.0)
+    }
+}
+
 type AppCtx = Arc<App>;
 struct App {
     pub watch_dir: PathBuf,
+    pub scan_interval: u64,
     pub dvr_file: RwLock<Option<PathBuf>>,
     pub enabled: AtomicBool,
     users: Vec<config::User>,
+    tracker: StreamTracker,
 }
 
 impl App {
@@ -57,6 +76,7 @@ impl App {
 
 async fn stream_to_body<P: AsRef<Path>>(
     path: P,
+    _permit: StreamTrackerPermit,
     mut body: Sender,
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
@@ -127,7 +147,7 @@ async fn find_latest_file(app: AppCtx) -> anyhow::Result<()> {
             needs_update = false;
         }
 
-        tokio::time::sleep(Duration::from_secs(60 * 5)).await;
+        tokio::time::sleep(Duration::from_secs(app.scan_interval)).await;
     }
 }
 
@@ -170,6 +190,37 @@ async fn enable_live_stream(
     Ok(HttpResponseOk(()))
 }
 
+#[derive(Serialize, JsonSchema)]
+struct StatusResponse {
+    /// Number of active streams
+    active: usize,
+}
+
+#[endpoint {
+    method = GET,
+    path = "/api/status"
+}]
+/// Admin endpoint to get server status.
+async fn get_status(
+    rqctx: Arc<RequestContext<AppCtx>>,
+    auth_parms: Query<AuthQueryParam>,
+) -> Result<HttpResponseOk<StatusResponse>, HttpError> {
+    let app = rqctx.context();
+    let auth = auth_parms.into_inner();
+    let user = app.require_auth(auth.auth)?;
+
+    if !user.is_admin() {
+        return Err(HttpError::for_client_error(
+            None,
+            StatusCode::UNAUTHORIZED,
+            "Insufficient creds".into(),
+        ));
+    }
+
+    let resp = StatusResponse { active: app.tracker.active_permits() };
+    Ok(HttpResponseOk(resp))
+}
+
 #[endpoint {
     method = GET,
     path = "/live"
@@ -199,8 +250,9 @@ async fn live_stream(
 
     // Everything is good lets start streaming the file.
     let (tx, body) = Body::channel();
+    let permit = app.tracker.permit();
     tokio::spawn(async {
-        if let Err(e) = stream_to_body(file, tx).await {
+        if let Err(e) = stream_to_body(file, permit, tx).await {
             eprintln!("stream error: {e:?}");
         }
     });
@@ -224,7 +276,8 @@ fn main() -> anyhow::Result<()> {
         .to_logger("minimal-example")?;
 
     let Config {
-        server: Server { host, port, reduce_privs, watch_dir, threads },
+        server:
+            Server { host, port, reduce_privs, watch_dir, threads, scan_interval },
         users,
         tls,
     } = Config::from_file("config.toml")?;
@@ -234,17 +287,21 @@ fn main() -> anyhow::Result<()> {
     }
 
     let nthreads = threads.unwrap_or(4);
+    let scan_interval = scan_interval.unwrap_or(60 * 5);
     let tls = tls.map(From::from);
 
     let mut api = ApiDescription::new();
     api.register(live_stream).unwrap();
     api.register(enable_live_stream).unwrap();
+    api.register(get_status).unwrap();
 
     let app = Arc::new(App {
         watch_dir,
+        scan_interval,
         dvr_file: RwLock::new(None),
         enabled: AtomicBool::new(false),
         users,
+        tracker: StreamTracker::new(),
     });
     let app_clone = Arc::clone(&app);
 
