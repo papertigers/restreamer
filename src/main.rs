@@ -72,6 +72,21 @@ impl App {
             )
         })
     }
+
+    fn require_admin_auth<T: AsRef<str>>(
+        &self,
+        token: T,
+    ) -> Result<(), HttpError> {
+        let user = self.require_auth(token)?;
+        match user.is_admin() {
+            true => Ok(()),
+            false => Err(HttpError::for_client_error(
+                None,
+                StatusCode::UNAUTHORIZED,
+                "Insufficient creds".into(),
+            )),
+        }
+    }
 }
 
 async fn stream_to_body<P: AsRef<Path>>(
@@ -175,15 +190,7 @@ async fn enable_live_stream(
     let app = rqctx.context();
     let query = query_parms.into_inner();
     let auth = auth_parms.into_inner();
-    let user = app.require_auth(auth.auth)?;
-
-    if !user.is_admin() {
-        return Err(HttpError::for_client_error(
-            None,
-            StatusCode::UNAUTHORIZED,
-            "Insufficient creds".into(),
-        ));
-    }
+    app.require_admin_auth(auth.auth)?;
 
     // TODO we could also check for existing live streams and use a notify
     // channel to shutdown them down if an admin has disabled live streaming.
@@ -208,15 +215,7 @@ async fn get_status(
 ) -> Result<HttpResponseOk<StatusResponse>, HttpError> {
     let app = rqctx.context();
     let auth = auth_parms.into_inner();
-    let user = app.require_auth(auth.auth)?;
-
-    if !user.is_admin() {
-        return Err(HttpError::for_client_error(
-            None,
-            StatusCode::UNAUTHORIZED,
-            "Insufficient creds".into(),
-        ));
-    }
+    app.require_admin_auth(auth.auth)?;
 
     let resp = StatusResponse { active: app.tracker.active_permits() };
     Ok(HttpResponseOk(resp))
