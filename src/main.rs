@@ -129,6 +129,7 @@ async fn find_latest_file(app: AppCtx) -> anyhow::Result<()> {
                 (None, None) => {
                     file = Some(ent.path());
                     last_modified = Some(modified);
+                    needs_update = true;
                 }
                 (Some(_old_file), Some(old_last_modified)) => {
                     if modified > old_last_modified {
