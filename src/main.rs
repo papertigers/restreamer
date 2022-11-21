@@ -76,10 +76,10 @@ impl App {
     fn require_admin_auth<T: AsRef<str>>(
         &self,
         token: T,
-    ) -> Result<(), HttpError> {
+    ) -> Result<&config::User, HttpError> {
         let user = self.require_auth(token)?;
         match user.is_admin() {
-            true => Ok(()),
+            true => Ok(user),
             false => Err(HttpError::for_client_error(
                 None,
                 StatusCode::UNAUTHORIZED,
@@ -202,6 +202,12 @@ async fn enable_live_stream(
 struct StatusResponse {
     /// Number of active streams
     active: usize,
+    /// Directory being watched
+    watch_dir: PathBuf,
+    /// Current file to stream
+    file: Option<PathBuf>,
+    /// Streaming enabled
+    enabled: bool,
 }
 
 #[endpoint {
@@ -217,7 +223,13 @@ async fn get_status(
     let auth = auth_parms.into_inner();
     app.require_admin_auth(auth.auth)?;
 
-    let resp = StatusResponse { active: app.tracker.active_permits() };
+    let resp = StatusResponse {
+        active: app.tracker.active_permits(),
+        watch_dir: app.watch_dir.clone(),
+        file: app.dvr_file.read().await.clone(),
+        enabled: app.enabled.load(Ordering::SeqCst),
+    };
+
     Ok(HttpResponseOk(resp))
 }
 
