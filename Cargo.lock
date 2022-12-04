@@ -321,6 +321,7 @@ dependencies = [
  "illumos-priv",
  "schemars",
  "serde",
+ "slog",
  "tokio",
  "toml",
 ]

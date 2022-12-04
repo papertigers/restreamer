@@ -14,5 +14,6 @@ hyper = "0.14.22"
 illumos-priv = "0.2.0"
 schemars = "0.8.11"
 serde = "1.0.147"
+slog = "2.7.0"
 tokio = { version = "1.21.2", features = ["full"] }
 toml = "0.5.9"

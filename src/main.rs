@@ -13,6 +13,7 @@ use hyper::{body::Sender, Body, Response, StatusCode};
 use illumos_priv::{PrivOp, PrivPtype, PrivSet, Privilege};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use slog::{error, info};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -97,6 +98,7 @@ async fn stream_to_body<P: AsRef<Path>>(
     let path = path.as_ref();
     let mut buf = vec![0; 1024];
     let mut file = BufReader::new(File::open(path).await?);
+    let mut counter = 0;
 
     // Read the mpg headers and send them
     file.read_exact(&mut buf).await?;
@@ -114,9 +116,14 @@ async fn stream_to_body<P: AsRef<Path>>(
         // the consumer is too quick. In either case we should delay our next
         // read attempt.
         if buf.is_empty() {
+            counter += 1;
+            // in the case where the file stops growing, we end up sleeping for
+            // 10ms at a time. So, size the range to roughly 5s of inactivity.
+            if counter > 500 {
+                // EOF
+                return Ok(());
+            }
             tokio::time::sleep(Duration::from_millis(10)).await;
-            // TODO stat the file and see if the filesize is changing to
-            // determine if we should kill the stream.
             continue;
         }
 
@@ -148,6 +155,8 @@ async fn find_latest_file(app: AppCtx) -> anyhow::Result<()> {
                 }
                 (Some(_old_file), Some(old_last_modified)) => {
                     if modified > old_last_modified {
+                        // TODO we can probably ignore the write if the
+                        // file hasn't changed.
                         file = Some(ent.path());
                         last_modified = Some(modified);
                         needs_update = true;
@@ -205,7 +214,7 @@ struct StatusResponse {
     /// Directory being watched
     watch_dir: PathBuf,
     /// Current file to stream
-    file: Option<PathBuf>,
+    file: Option<String>,
     /// Streaming enabled
     enabled: bool,
 }
@@ -223,10 +232,15 @@ async fn get_status(
     let auth = auth_parms.into_inner();
     app.require_admin_auth(auth.auth)?;
 
+    let file =
+        app.dvr_file.read().await.clone().and_then(|p| {
+            p.file_name().map(|f| f.to_string_lossy().into_owned())
+        });
+
     let resp = StatusResponse {
         active: app.tracker.active_permits(),
         watch_dir: app.watch_dir.clone(),
-        file: app.dvr_file.read().await.clone(),
+        file,
         enabled: app.enabled.load(Ordering::SeqCst),
     };
 
@@ -263,9 +277,11 @@ async fn live_stream(
     // Everything is good lets start streaming the file.
     let (tx, body) = Body::channel();
     let permit = app.tracker.permit();
-    tokio::spawn(async {
-        if let Err(e) = stream_to_body(file, permit, tx).await {
-            eprintln!("stream error: {e:?}");
+    let log = rqctx.log.clone();
+    tokio::spawn(async move {
+        match stream_to_body(file, permit, tx).await {
+            Ok(_) => info!(log, "reached EOF for live stream"),
+            Err(e) => error!(log, "stream error: {e:?}"),
         }
     });
 
