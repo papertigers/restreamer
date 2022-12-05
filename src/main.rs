@@ -127,6 +127,9 @@ async fn stream_to_body<P: AsRef<Path>>(
             continue;
         }
 
+        // reset counter so that we don't prematurely end a stream.
+        counter = 0;
+
         // TODO a DTrace probe here would be nice so we could see the avg byte
         // size we have read and are attempting to send.
         body.send_data(buf.freeze()).await?;
