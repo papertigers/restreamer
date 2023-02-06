@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Weak};
 use std::{io::SeekFrom, path::Path, time::Duration};
+use structopt::StructOpt;
 use tokio::fs;
 use tokio::sync::RwLock;
 use tokio::{
@@ -27,6 +28,18 @@ use tokio::{
 };
 
 const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
+
+#[derive(Debug, StructOpt)]
+#[structopt(name = PROGRAM_NAME, about = "restream Channels DVR")]
+struct Opt {
+    #[structopt(
+        parse(from_os_str),
+        short = "c",
+        long = "config",
+        required = true
+    )]
+    config_path: PathBuf,
+}
 
 struct StreamTracker(Arc<()>);
 struct StreamTrackerPermit(Weak<()>);
@@ -303,15 +316,17 @@ fn drop_privs() -> anyhow::Result<()> {
 }
 
 fn main() -> anyhow::Result<()> {
+    let opts = Opt::from_args();
+
     let log = ConfigLogging::StderrTerminal { level: ConfigLoggingLevel::Info }
-        .to_logger("minimal-example")?;
+        .to_logger(PROGRAM_NAME)?;
 
     let Config {
         server:
             Server { host, port, reduce_privs, watch_dir, threads, scan_interval },
         users,
         tls,
-    } = Config::from_file("config.toml")?;
+    } = Config::from_file(opts.config_path)?;
 
     if let Some(true) = reduce_privs {
         drop_privs()?;
