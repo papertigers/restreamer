@@ -44,7 +44,7 @@ pub struct Tls {
 
 impl From<Tls> for ConfigTls {
     fn from(t: Tls) -> Self {
-        Self { cert_file: t.cert, key_file: t.key }
+        Self::AsFile { cert_file: t.cert, key_file: t.key }
     }
 }
 

@@ -208,7 +208,7 @@ struct EnableStreamQueryParam {
 }]
 /// Admin endpoint to enable/disable the servers live stream.
 async fn enable_live_stream(
-    rqctx: Arc<RequestContext<AppCtx>>,
+    rqctx: RequestContext<AppCtx>,
     query_parms: Query<EnableStreamQueryParam>,
     auth_parms: Query<AuthQueryParam>,
 ) -> Result<HttpResponseOk<()>, HttpError> {
@@ -241,7 +241,7 @@ struct StatusResponse {
 }]
 /// Admin endpoint to get server status.
 async fn get_status(
-    rqctx: Arc<RequestContext<AppCtx>>,
+    rqctx: RequestContext<AppCtx>,
     auth_parms: Query<AuthQueryParam>,
 ) -> Result<HttpResponseOk<StatusResponse>, HttpError> {
     let app = rqctx.context();
@@ -269,7 +269,7 @@ async fn get_status(
 }]
 /// Live stream endpoint for end users.
 async fn live_stream(
-    rqctx: Arc<RequestContext<AppCtx>>,
+    rqctx: RequestContext<AppCtx>,
     auth_parms: Query<AuthQueryParam>,
 ) -> Result<Response<Body>, HttpError> {
     let app = rqctx.context();
