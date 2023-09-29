@@ -161,21 +161,22 @@ async fn find_latest_file(app: AppCtx) -> anyhow::Result<()> {
                 continue;
             }
 
-            let modified = ent.metadata().await?.modified()?;
+            let new_last_modified = ent.metadata().await?.modified()?;
+            let new_file = ent.path();
 
             match (&file, last_modified) {
                 (None, None) => {
                     file = Some(ent.path());
-                    last_modified = Some(modified);
+                    last_modified = Some(new_last_modified);
                     needs_update = true;
                 }
-                (Some(_old_file), Some(old_last_modified)) => {
-                    if modified > old_last_modified {
-                        // TODO we can probably ignore the write if the
-                        // file hasn't changed.
-                        file = Some(ent.path());
-                        last_modified = Some(modified);
-                        needs_update = true;
+                (Some(old_file), Some(old_last_modified)) => {
+                    if new_last_modified > old_last_modified {
+                        if old_file != &new_file {
+                            needs_update = true;
+                        }
+                        file = Some(new_file);
+                        last_modified = Some(new_last_modified);
                     }
                 }
                 _ => unreachable!(),
