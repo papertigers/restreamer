@@ -324,7 +324,15 @@ fn main() -> anyhow::Result<()> {
 
     let Config {
         server:
-            Server { host, port, reduce_privs, watch_dir, threads, scan_interval },
+            Server {
+                host,
+                port,
+                reduce_privs,
+                watch_dir,
+                threads,
+                scan_interval,
+                default_enabled,
+            },
         users,
         tls,
     } = Config::from_file(opts.config_path)?;
@@ -336,6 +344,7 @@ fn main() -> anyhow::Result<()> {
     let nthreads = threads.unwrap_or(4);
     let scan_interval = scan_interval.unwrap_or(60 * 5);
     let tls = tls.map(From::from);
+    let enabled = default_enabled.unwrap_or(false);
 
     let mut api = ApiDescription::new();
     api.register(live_stream).unwrap();
@@ -346,7 +355,7 @@ fn main() -> anyhow::Result<()> {
         watch_dir,
         scan_interval,
         dvr_file: RwLock::new(None),
-        enabled: AtomicBool::new(false),
+        enabled: AtomicBool::new(enabled),
         users,
         tracker: StreamTracker::new(),
     });

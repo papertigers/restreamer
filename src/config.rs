@@ -22,6 +22,8 @@ pub struct Server {
     pub watch_dir: PathBuf,
     /// How often to scan for new files in seconds
     pub scan_interval: Option<u64>,
+    /// Is the server enabled by default
+    pub default_enabled: Option<bool>,
 }
 
 #[derive(Deserialize)]
