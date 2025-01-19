@@ -1,31 +1,40 @@
 mod config;
 
-use anyhow::{anyhow, bail};
-use bytes::BytesMut;
+use anyhow::bail;
+use bytes::{Bytes, BytesMut};
 use config::{Config, Server};
 use dropshot::{
-    endpoint, ApiDescription, ConfigDropshot, ConfigLogging,
-    ConfigLoggingLevel, HttpError, HttpResponseOk, HttpServerStarter, Query,
-    RequestContext,
+    endpoint, ApiDescription, Body, ClientErrorStatusCode, ConfigDropshot,
+    ConfigLogging, ConfigLoggingLevel, HandlerTaskMode::CancelOnDisconnect,
+    HttpError, HttpResponseOk, Query, RequestContext, ServerBuilder,
 };
 use futures_util::future;
-use hyper::{body::Sender, Body, Response, StatusCode};
+use http_body_util::StreamBody;
+use hyper::{body::Frame, Response};
 use illumos_priv::{PrivOp, PrivPtype, PrivSet, Privilege};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use slog::{error, info};
-use std::net::SocketAddr;
-use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Weak};
-use std::{io::SeekFrom, path::Path, time::Duration};
-use structopt::StructOpt;
-use tokio::fs;
-use tokio::sync::RwLock;
-use tokio::{
-    fs::File,
-    io::{AsyncReadExt, AsyncSeekExt, BufReader},
+use std::{
+    io::SeekFrom,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Weak,
+    },
+    time::Duration,
 };
+use structopt::StructOpt;
+use tokio::{
+    fs::{self, File},
+    io::{AsyncReadExt, AsyncSeekExt, BufReader},
+    sync::{
+        mpsc::{self, Sender},
+        RwLock,
+    },
+};
+use tokio_stream::wrappers::ReceiverStream;
 
 const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -42,6 +51,8 @@ struct Opt {
 }
 
 struct StreamTracker(Arc<()>);
+// The `()` is used to tracking connected clients even though it's never used
+#[allow(dead_code)]
 struct StreamTrackerPermit(Weak<()>);
 
 impl StreamTracker {
@@ -81,7 +92,7 @@ impl App {
         self.get_user(token).ok_or_else(|| {
             HttpError::for_client_error(
                 None,
-                StatusCode::UNAUTHORIZED,
+                ClientErrorStatusCode::UNAUTHORIZED,
                 "Provide a valid auth token".into(),
             )
         })
@@ -96,7 +107,7 @@ impl App {
             true => Ok(user),
             false => Err(HttpError::for_client_error(
                 None,
-                StatusCode::UNAUTHORIZED,
+                ClientErrorStatusCode::UNAUTHORIZED,
                 "Insufficient creds".into(),
             )),
         }
@@ -106,7 +117,7 @@ impl App {
 async fn stream_to_body<P: AsRef<Path>>(
     path: P,
     _permit: StreamTrackerPermit,
-    mut body: Sender,
+    body: Sender<Result<Frame<Bytes>, HttpError>>,
 ) -> anyhow::Result<()> {
     let path = path.as_ref();
     let mut buf = vec![0; 1024];
@@ -115,7 +126,7 @@ async fn stream_to_body<P: AsRef<Path>>(
 
     // Read the mpg headers and send them
     file.read_exact(&mut buf).await?;
-    body.send_data(buf.into()).await?;
+    body.send(Ok(Frame::data(buf.into()))).await?;
 
     // Seek to "live"
     file.seek(SeekFrom::End(256)).await?;
@@ -145,7 +156,7 @@ async fn stream_to_body<P: AsRef<Path>>(
 
         // TODO a DTrace probe here would be nice so we could see the avg byte
         // size we have read and are attempting to send.
-        body.send_data(buf.freeze()).await?;
+        body.send(Ok(Frame::data(buf.freeze()))).await?;
     }
 }
 
@@ -292,7 +303,9 @@ async fn live_stream(
     })?;
 
     // Everything is good lets start streaming the file.
-    let (tx, body) = Body::channel();
+    let (tx, rx) = mpsc::channel::<Result<Frame<_>, _>>(10);
+    let stream = ReceiverStream::new(rx);
+    let body = StreamBody::new(stream);
     let permit = app.tracker.permit();
     let log = rqctx.log.clone();
     tokio::spawn(async move {
@@ -302,7 +315,7 @@ async fn live_stream(
         }
     });
 
-    Ok(Response::builder().status(StatusCode::OK).body(body)?)
+    Ok(Response::new(Body::wrap(body)))
 }
 
 fn drop_privs() -> anyhow::Result<()> {
@@ -370,26 +383,23 @@ fn main() -> anyhow::Result<()> {
         .expect("failed to build tokio runtime");
 
     if let Err(e) = rt.block_on(async {
-        let server = match HttpServerStarter::new(
-            &ConfigDropshot {
-                bind_address: SocketAddr::new(host, port),
-                request_body_max_bytes: 1024,
-                tls,
-            },
-            api,
-            app,
-            &log,
-        ) {
-            Ok(server) => server,
-            Err(e) => bail!(e),
+        let server_config = ConfigDropshot {
+            bind_address: SocketAddr::new(host, port),
+            default_request_body_max_bytes: 1024,
+            default_handler_task_mode: CancelOnDisconnect,
+            log_headers: Vec::new(),
         };
 
-        let http = async {
-            server.start().await.map_err(|e| anyhow!("server error: {e:?}"))
+        let watcher = async {
+            find_latest_file(app_clone).await.map_err(|e| format!("{e}"))
         };
-        let watcher = find_latest_file(app_clone);
+        let server = ServerBuilder::new(api, app, log)
+            .config(server_config)
+            .tls(tls)
+            .start()
+            .map_err(|e| format!("failed to create server: {}", e))?;
 
-        future::try_join(http, watcher).await
+        future::try_join(server, watcher).await
     }) {
         bail! {"{e}"};
     };

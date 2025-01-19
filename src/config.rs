@@ -1,8 +1,7 @@
 use dropshot::ConfigTls;
 use serde::Deserialize;
 use std::{
-    fs::File,
-    io::Read,
+    fs,
     net::IpAddr,
     path::{Path, PathBuf},
 };
@@ -58,12 +57,9 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> std::io::Result<Self> {
-        let path = path.as_ref();
-        let mut f = File::open(path)?;
-        let mut buf: Vec<u8> = Vec::new();
-        f.read_to_end(&mut buf)?;
-        let config: Self = toml::from_slice(&buf)?;
+    pub fn from_file<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let file = fs::read_to_string(path)?;
+        let config: Self = toml::from_str(&file)?;
 
         Ok(config)
     }
