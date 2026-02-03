@@ -35,6 +35,7 @@ use tokio::{
     },
 };
 use tokio_stream::wrappers::ReceiverStream;
+use usdt::register_probes;
 
 const PROGRAM_NAME: &str = env!("CARGO_PKG_NAME");
 
@@ -119,6 +120,7 @@ async fn stream_to_body<P: AsRef<Path>>(
     _permit: StreamTrackerPermit,
     body: Sender<Result<Frame<Bytes>, HttpError>>,
 ) -> anyhow::Result<()> {
+    let id = usdt::UniqueId::new();
     let path = path.as_ref();
     let mut buf = vec![0; 1024];
     let mut file = BufReader::new(File::open(path).await?);
@@ -154,9 +156,9 @@ async fn stream_to_body<P: AsRef<Path>>(
         // reset counter so that we don't prematurely end a stream.
         counter = 0;
 
-        // TODO a DTrace probe here would be nice so we could see the avg byte
-        // size we have read and are attempting to send.
-        body.send(Ok(Frame::data(buf.freeze()))).await?;
+        let frozen = buf.freeze();
+        probes::data_tx!(|| { (id.clone(), frozen.len()) });
+        body.send(Ok(Frame::data(frozen))).await?;
     }
 }
 
@@ -350,6 +352,8 @@ fn main() -> anyhow::Result<()> {
         tls,
     } = Config::from_file(opts.config_path)?;
 
+    register_probes().unwrap();
+
     if let Some(true) = reduce_privs {
         drop_privs()?;
     }
@@ -405,4 +409,9 @@ fn main() -> anyhow::Result<()> {
     };
 
     Ok(())
+}
+
+#[usdt::provider(provider = "restreamer")]
+mod probes {
+    fn data_tx(_: &usdt::UniqueId, size: usize) {}
 }
