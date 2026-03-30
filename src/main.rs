@@ -392,6 +392,7 @@ fn main() -> anyhow::Result<()> {
             default_request_body_max_bytes: 1024,
             default_handler_task_mode: CancelOnDisconnect,
             log_headers: Vec::new(),
+            compression: dropshot::CompressionConfig::Gzip,
         };
 
         let watcher = async {
